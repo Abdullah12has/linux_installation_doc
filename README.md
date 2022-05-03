@@ -21,7 +21,7 @@ for its services to run (except for SSH).
 1. Downloaded and installed the Ubuntu Server 
 2. While installing, it asked for packages I want to install with it and I chose Posgresql with it.
 3. Set the username to abdullah and password to 123
-4. Went to the ssh config file in `etc/ssh/ssh_config` and enabled `password authentication yes`
+4. Went to the ssh config file in `etc/ssh/sshd_config` and enabled `password authentication yes`
 5. logged into the server using ssh from my mac `ssh abdullah@139.179.211.162` (by first briding the connection and then finding the ip address) 
 
 Creating a new postgres user admin for the database `sudo -u postgres createuser --interactive` and created a user `admin` with password `123`.
@@ -34,7 +34,7 @@ Creating a new postgres user admin for the database `sudo -u postgres createuser
  1. `cd /etc/postgresql/14/main/ `
  2. `nano postgresql.conf` and change `#listen_addresses = 'localhost'` to  `listen_addresses = '*'` so that it doesnt block traffic from other server
  3. Go to the `pg_hba.conf` file and change `host    all             all             127.0.0.1/32 ` to `host    all             all             0.0.0.0/0` so that it gives access to the remote server.
- 4. Allow firewall acces by using `sudo ufw allow 5432/tcp` which will stop the firewall from dropping the packets on port 5432 which is used by posgres.
+ 4. Allow firewall acces by using `sudo ufw allow 5432/tcp` which will stop the firewall from dropping the packets on port 5432 which is used by posgres (right now firewall is disabled).
  5. `systemctl restart postgresql` to restart the service 
  6. `psql -h 139.179.211.162 -d admin -U projectData` to access the Database from another machine. I also used TablePlus to connect to the db and it connected. 
 
@@ -46,7 +46,7 @@ Creating a new postgres user admin for the database `sudo -u postgres createuser
 
  Installed ububtu server with user `server` and password `123`
  
- Went to the ssh config file in `etc/ssh/ssh_config` and enabled `password authentication yes`
+ Went to the ssh config file in `etc/ssh/sshd_config` and enabled `password authentication yes`
 
  logged into the server using ssh from my mac `ssh server@139.179.211.162` (by first briding the connection and then finding the ip address) 
 
@@ -54,6 +54,7 @@ Creating a new postgres user admin for the database `sudo -u postgres createuser
 
 #### Before that need to understand types of backups: ####
 
+Definations:
 * Full Backup: pgBackRest copies the entire contents of the database cluster to the backup. The first backup of the database cluster is always a Full Backup. pgBackRest is always able to restore a full backup directly. The full backup does not depend on any files outside of the full backup for consistency.
 
 * Differential Backup: pgBackRest copies only those database cluster files that have changed since the last full backup. pgBackRest restores a differential backup by copying all of the files in the chosen differential backup and the appropriate unchanged files from the previous full backup. 
@@ -75,10 +76,10 @@ Next I copied the public keys from `/var/lib/postgresql/.ssh/` and pasted them i
 * To setup the backup, I change the content of `/etc/pgbackrest.conf` on Database server and added the following:
 ~~~
 [my_cluster]
-pg1-path=/var/lib/postgresql/12/main
+pg1-path=/var/lib/postgresql/14/main
 
 [global]
-repo1-host=pg-backup
+repo1-host=backupserver
 repo1-host-user=postgres
 
 [global:archive-push]
@@ -148,19 +149,76 @@ I tried `sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=inf
 
 I had some things I was hoping that wouldn't cause a problem but my guess was that they're causing this error. 
 
-1. postgres user was not in the sudoer file so I changed that using `	
-sudo usermod -a -G sudo postgres` 
+1. postgres user was not in the sudoer file so I changed that using 
+`sudo usermod -a -G sudo postgres` 
 
 2. Just realized that I had setup the SSH incorrectly. I removed the folder `authorized keys` in both the machines and ran `ssh-copy-id postgres@139.179.211.162` and `ssh-copy-id postgres@139.179.211.246` so that both machines login to each other without a password using the keys.
 
 3. Hostname not working, when I do ssh with ip address it works, but doesnt work when I use the hostname of `backupserver` for example. Also the ip addresses are configured by DHCP so there is a problem that if the devices change the network, their ips will change and all the configuration will get ruined.
 
-Right now Backup Server has ip: `139.179.211.246`
-posgresqserver has ip: `139.179.211.162`
 
-I should change these ips to being static but what if they're not resolved. Another option is to make the connctions NAT and then give them static IPs, since the environment will not change. 
+Went and edited the `/etc/hosts` file and added
 
-So Making an `internal network` from Virtualbox would be the best choice for such a thing so that it can communicate with each other and ip addresses don't change. 
+ `139.179.211.246` `backupserver` 
+
+ `139.179.211.162` `posgresqserver`
+
+Right now:
+
+`backupserver` has ip: `139.179.211.246`
+
+`posgresqserver` has ip: `139.179.211.162` (need to make them static as well)
+
+
+Tried ssh using the hostnames:
+`ssh postgres@posgresqserver`, it logged in without the password from backupserver
+`ssh postgres@backupserver`, it logged in without the password from backupserver but this time I got an error. There is a problem with accessing backupserver from server. 
+
+So I tried `ssh -v postgres@139.179.211.246` which led to successful ssh connection (without password ) to the backup server. I checked the etc/hosts file again and it's also correctly configured. Then I tried seeing using nslookup. It shows the correct ip address `nslookup backupserver`
+I tried `ping backupserver`, it also works. But when I do ssh with the hostname, it refuses. I will configure the appication with the ip address instead then.
+
+I double checked and it was a typo in writing ip address in the `etc/host` file. I accidently wrote `139.179.221.246` instead of `139.179.211.246` and that caused me 5 hours of debugging -_-
+
+
+
+### Static IPs Configuration ###
+Making IP addresses static so that they do not change when run on a seperate machine. The settings of the VM is still bridge so that they can communicate but we can't let the ip address change or the servers won't be able to communicate with each other.
+
+Side note: This version of Ubuntu does not have `/network/interfaces` file so need to do this configuration using `nano /etc/netplan/00-installer-config.yaml`
+
+
+Static Address Configuration of Backup Server
+```
+network:
+  ethernets:
+    enp0s3:
+      dhcp4: no
+      addresses:
+        - 139.179.211.246/24
+      gateway4: 139.179.211.1
+      nameservers:
+          addresses: [8.8.8.8, 1.1.1.1]
+  version: 2
+```
+
+Static Address Configuration of DB Server
+
+```
+network:
+  ethernets:
+    enp0s3:
+      dhcp4: no
+      addresses:
+        - 139.179.211.162/24
+      gateway4: 139.179.211.1
+      nameservers:
+          addresses: [8.8.8.8, 1.1.1.1]
+  version: 2
+```
+
+Then `sudo netplan apply` to apply the changes.
+
+Now the ip addresses won't change and cause problems.
 
 
 
