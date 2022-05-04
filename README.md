@@ -275,13 +275,38 @@ WARN: no prior backup exists, incr backup has been changed to full
 
 The full backup was a success. That means it is working. Just need to setup cron jobs for it now. 
 
+Tried `sudo -u postgres pgbackrest --type=diff --stanza=my_cluster --log-level-console=info backup` 
+
+and Result:
+
+```
+2022-05-04 00:04:51.600 P00   INFO: backup command begin 2.37: --exec-id=9285-9589fda3 --log-level-console=info --pg1-host=posgresqserver --pg1-host-user=postgres --pg1-path=/var/lib/postgresql/14/main --process-max=2 --repo1-path=/var/lib/pgbackrest --repo1-retention-diff=1 --repo1-retention-full=2 --stanza=my_cluster --start-fast --type=diff
+2022-05-04 00:04:52.741 P00   INFO: last backup label = 20220503-224529F, version = 2.37
+2022-05-04 00:04:52.741 P00   INFO: execute non-exclusive pg_start_backup(): backup begins after the requested immediate checkpoint completes
+2022-05-04 00:04:53.248 P00   INFO: backup start archive = 000000010000000000000014, lsn = 0/14000028
+2022-05-04 00:04:53.248 P00   INFO: check archive for prior segment 000000010000000000000013
+2022-05-04 00:04:55.692 P00   INFO: execute non-exclusive pg_stop_backup() and wait for all WAL segments to archive
+2022-05-04 00:04:55.896 P00   INFO: backup stop archive = 000000010000000000000014, lsn = 0/14000138
+2022-05-04 00:04:55.900 P00   INFO: check archive for segment(s) 000000010000000000000014:000000010000000000000014
+2022-05-04 00:04:56.033 P00   INFO: new backup label = 20220503-224529F_20220504-000452D
+2022-05-04 00:04:56.089 P00   INFO: diff backup size = 8.3KB, file total = 1538
+2022-05-04 00:04:56.089 P00   INFO: backup command end: completed successfully (4492ms)
+2022-05-04 00:04:56.089 P00   INFO: expire command begin 2.37: --exec-id=9285-9589fda3 --log-level-console=info --repo1-path=/var/lib/pgbackrest --repo1-retention-diff=1 --repo1-retention-full=2 --stanza=my_cluster
+2022-05-04 00:04:56.097 P00   INFO: expire command end: completed successfully (8ms)
+postgres@backupserver:~$ sudo -u postgres pgbackrest --type=diff --stanza=my_cluster --log-level-console=info backup
 
 
+```
 
+Tried `sudo -u postgres pgbackrest --type=incr --stanza=my_cluster --log-level-console=info backup`
 
+and the Incremental backup was also a success.
 
+Next `crontab -e` to open the cron file to set the scheduled backups.
 
-
-
+``` 
+0 1  1   *   *     /usr/bin/pgbackrest --type=full --stanza=my_cluster backup #every month
+0 2  *   *   *   /usr/bin/pgbackrest --type=incr --stanza=my_cluster backup #every day
+```
 
 
