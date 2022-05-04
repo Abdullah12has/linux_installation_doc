@@ -96,6 +96,22 @@ listen_addresses = '*'
 max_wal_senders = 3
 wal_level = replica
 ```
+Alternate is to go to psql and write the commands
+```
+alter system set archive_command = 'pgbackrest --stanza=my_cluster archive-push %p';
+alter system set archive_mode = 'on';
+ alter system set wal_level = 'replica';
+```
+etc...
+
+then you can check by going into psql 
+```
+show wal_level;
+show archive_mode;
+show archive_command;
+show hot_standby; 
+```
+If they are the same as what we changed. It's good to go. 
 
 Then Restarted the service `sudo systemctl restart postgresql`
 
@@ -140,12 +156,17 @@ pg1-path=/var/lib/postgresql/12/main
 [global]                                                                                                                                  
 process-max=2
 repo1-path=/var/lib/pgbackrest
-repo1-retention-full=2
-repo1-retention-diff=1
+repo1-retention-full=6
+repo1-retention-incr=30
 repo1-host-user=postgres
 start-fast=y
 
 ```
+
+`repo1-retention-full=6`  means there will be 6 full backups retained. Each is after a month that means we can have full backups of 6 months back.
+
+`repo1-retention-incr=30` means it will retain 30 incremental backups. Since there is one everyday, we will have of everyday until there is a new full backup. 
+
 
 I tried `sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info stanza-create` to create the first backup. This command should work on both the machines. But it failed.
 
@@ -303,10 +324,62 @@ Tried `sudo -u postgres pgbackrest --type=incr --stanza=my_cluster --log-level-c
 and the Incremental backup was also a success.
 
 Next `crontab -e` to open the cron file to set the scheduled backups.
+* it is recommended to use full paths in the cron file. Athough it was working without it as well. 
+
 
 ``` 
 0 1  1   *   *     /usr/bin/pgbackrest --type=full --stanza=my_cluster backup #every month
 0 2  *   *   *   /usr/bin/pgbackrest --type=incr --stanza=my_cluster backup #every day
 ```
+
+
+Need to make directories for logs of pgbackrest 
+so `sudo mkdir -p /var/log/pgbackrest`
+`sudo chown postgres:postgres /var/log/pgbackrest` to give ownership to postgres user
+
+ `sudo chmod 640 /etc/pgbackrest.conf` changing permissions of the main config file as recommended by the documentation.
+
+
+The path where the backup repo is located is `/var/lib/pgbackrest` on the backup server.
+
+Just to double check the if pgbackrest is working:
+
+ `pgbackrest check --stanza=my_cluster --log-level-console=info
+`
+
+returns:
+
+```
+2022-05-04 14:16:30.152 P00   INFO: check command begin 2.37: --exec-id=1411-16d5facf --log-level-console=info --pg1-host=posgresqserver --pg1-host-user=postgres --pg1-path=/var/lib/postgresql/14/main --repo1-path=/var/lib/pgbackrest --stanza=my_cluster
+2022-05-04 14:16:31.152 P00   INFO: check repo1 configuration (primary)
+2022-05-04 14:16:31.271 P00   INFO: check repo1 archive for WAL (primary)
+2022-05-04 14:16:31.974 P00   INFO: WAL segment 00000001000000000000001D successfully archived to '/var/lib/pgbackrest/archive/my_cluster/14-1/0000000100000000/00000001000000000000001D-dbdbf830a265a09f5fa288b19288e73789c0570c.gz' on repo1
+2022-05-04 14:16:32.080 P00   INFO: check command end: completed successfully (1932ms)
+```
+
+Working fine.
+
+
+
+The Backup and it's scheduler is in place.
+
+## Restore ##
+
+To restore your DB from the backups, you need to stop the postgresql first by `sudo systemctl stop postgresql.service`
+
+` pgbackrest info` on the db server to see if there are backups that exist. Then `pgbackrest restore --stanza=my_cluster --log-level-console=info --delta` to restore the databse from backup.
+
+`sudo systemctl start postgresql.service` to run it again. And you will have a restored database from the backup server.
+
+
+
+
+
+
+
+
+
+
+
 
 
