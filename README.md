@@ -55,13 +55,15 @@ Creating a new postgres user admin for the database `sudo -u postgres createuser
 #### Before that need to understand types of backups: ####
 
 Definations:
-* Full Backup: pgBackRest copies the entire contents of the database cluster to the backup. The first backup of the database cluster is always a Full Backup. pgBackRest is always able to restore a full backup directly. The full backup does not depend on any files outside of the full backup for consistency.
+1. Full Backup: pgBackRest copies the entire contents of the database cluster to the backup. The first backup of the database cluster is always a Full Backup. pgBackRest is always able to restore a full backup directly. The full backup does not depend on any files outside of the full backup for consistency.
 
-* Differential Backup: pgBackRest copies only those database cluster files that have changed since the last full backup. pgBackRest restores a differential backup by copying all of the files in the chosen differential backup and the appropriate unchanged files from the previous full backup. 
+2. Differential Backup: pgBackRest copies only those database cluster files that have changed since the last full backup. pgBackRest restores a differential backup by copying all of the files in the chosen differential backup and the appropriate unchanged files from the previous full backup. 
 
 
-* Incremental Backup: pgBackRest copies only those database cluster files that have changed since the last backup (which can be another incremental backup, a differential backup, or a full backup). As an incremental backup only includes those files changed since the prior backup, they are generally much smaller than full or differential backups.
+3. Incremental Backup: pgBackRest copies only those database cluster files that have changed since the last backup (which can be another incremental backup, a differential backup, or a full backup). As an incremental backup only includes those files changed since the prior backup, they are generally much smaller than full or differential backups.
 
+
+* A stanza is the configuration for a PostgreSQL database cluster that defines where it is located, how it will be backed up, archiving options, etc.
 
 
 We need the servers to communicate with each other through SSH so I generated ssh keys for both using `ssh-keygen -t rsa -b 4096 -N ""` on both VMs.
@@ -147,6 +149,7 @@ start-fast=y
 
 I tried `sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info stanza-create` to create the first backup. This command should work on both the machines. But it failed.
 
+
 I had some things I was hoping that wouldn't cause a problem but my guess was that they're causing this error. 
 
 1. postgres user was not in the sudoer file so I changed that using 
@@ -156,7 +159,7 @@ I had some things I was hoping that wouldn't cause a problem but my guess was th
 
 3. Hostname not working, when I do ssh with ip address it works, but doesnt work when I use the hostname of `backupserver` for example. Also the ip addresses are configured by DHCP so there is a problem that if the devices change the network, their ips will change and all the configuration will get ruined.
 
-
+### Configuring Hostnames ###
 Went and edited the `/etc/hosts` file and added
 
  `139.179.211.246` `backupserver` 
@@ -174,11 +177,10 @@ Tried ssh using the hostnames:
 `ssh postgres@posgresqserver`, it logged in without the password from backupserver
 `ssh postgres@backupserver`, it logged in without the password from backupserver but this time I got an error. There is a problem with accessing backupserver from server. 
 
-So I tried `ssh -v postgres@139.179.211.246` which led to successful ssh connection (without password ) to the backup server. I checked the etc/hosts file again and it's also correctly configured. Then I tried seeing using nslookup. It shows the correct ip address `nslookup backupserver`
-I tried `ping backupserver`, it also works. But when I do ssh with the hostname, it refuses. I will configure the appication with the ip address instead then.
+- So I tried `ssh -v postgres@139.179.211.246` which led to successful ssh connection (without password ) to the backup server. I checked the etc/hosts file again and it's also correctly configured. Then I tried seeing using nslookup. It shows the correct ip address `nslookup backupserver`
+- I tried `ping backupserver`, it also works. But when I do ssh with the hostname, it refuses. I will configure the appication with the ip address instead then.
 
-I double checked and it was a typo in writing ip address in the `etc/host` file. I accidently wrote `139.179.221.246` instead of `139.179.211.246` and that caused me 5 hours of debugging -_-
-
+ I double checked and it was a typo in writing ip address in the `etc/host` file. I accidently wrote `139.179.221.246` instead of `139.179.211.246` and that caused me 5 hours of debugging -_-
 
 
 ### Static IPs Configuration ###
@@ -219,6 +221,60 @@ network:
 Then `sudo netplan apply` to apply the changes.
 
 Now the ip addresses won't change and cause problems.
+
+
+After configuring all this I ran the following commands on the backup server:
+
+`pgbackrest --stanza=my_cluster --log-level-console=info stanza-create`
+
+Output:
+
+```
+INFO: stanza-create command begin 2.37: --exec-id=8038-f7a9150c --log-level-console=info --pg1-host=posgresqserver --pg1-host-user=postgres --pg1-path=/var/lib/postgresql/14/main --repo1-path=/var/lib/pgbackrest --stanza=my_cluster
+2022-05-03 18:05:37.846 P00   INFO: stanza-create for stanza 'my_cluster' on repo1
+2022-05-03 18:05:37.956 P00   INFO: stanza-create command end: completed successfully (1341ms)
+```
+
+
+Then I try ` sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info check` on both server and backup to check if everything is configured correctly and working.
+
+The Result is: 
+
+```
+2022-05-03 22:38:26.872 P00   INFO: check command begin 2.37: --exec-id=2650-4cdf2f72 --log-level-console=info --pg1-path=/var/lib/postgresql/14/main --repo1-host=backupserver --repo1-host-user=postgres --stanza=my_cluster
+2022-05-03 22:38:27.477 P00   INFO: check repo1 configuration (primary)
+2022-05-03 22:38:28.306 P00   INFO: check repo1 archive for WAL (primary)
+2022-05-03 22:38:28.712 P00   INFO: WAL segment 00000001000000000000000F successfully archived to '/var/lib/pgbackrest/archive/my_cluster/14-1/0000000100000000/00000001000000000000000F-c483f004858e4b4df481e6cde9c01a0225adeb2f.gz' on repo1
+2022-05-03 22:38:28.812 P00   INFO: check command end: completed successfully (1943ms)
+```
+
+That means everything is okay.
+
+Next I try to make a full backup by running `pgbackrest --stanza=my_cluster --log-level-console=info backup` (need to be logged in as the postgres user) 
+
+or `sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info backup` if from other users.
+
+
+Result:
+
+```
+2022-05-03 22:45:29.002 P00   INFO: backup command begin 2.37: --exec-id=9048-5187e4b5 --log-level-console=info --pg1-host=posgresqserver --pg1-host-user=postgres --pg1-path=/var/lib/postgresql/14/main --process-max=2 --repo1-path=/var/lib/pgbackrest --repo1-retention-diff=1 --repo1-retention-full=2 --stanza=my_cluster --start-fast
+WARN: no prior backup exists, incr backup has been changed to full
+2022-05-03 22:45:30.085 P00   INFO: execute non-exclusive pg_start_backup(): backup begins after the requested immediate checkpoint completes
+2022-05-03 22:45:30.593 P00   INFO: backup start archive = 000000010000000000000012, lsn = 0/12000028
+2022-05-03 22:45:30.593 P00   INFO: check archive for prior segment 000000010000000000000011
+2022-05-03 22:45:36.216 P00   INFO: execute non-exclusive pg_stop_backup() and wait for all WAL segments to archive
+2022-05-03 22:45:36.420 P00   INFO: backup stop archive = 000000010000000000000012, lsn = 0/12000138
+2022-05-03 22:45:36.425 P00   INFO: check archive for segment(s) 000000010000000000000012:000000010000000000000012
+2022-05-03 22:45:36.551 P00   INFO: new backup label = 20220503-224529F
+2022-05-03 22:45:36.602 P00   INFO: full backup size = 41.6MB, file total = 1538
+2022-05-03 22:45:36.602 P00   INFO: backup command end: completed successfully (7603ms)
+2022-05-03 22:45:36.604 P00   INFO: expire command begin 2.37: --exec-id=9048-5187e4b5 --log-level-console=info --repo1-path=/var/lib/pgbackrest --repo1-retention-diff=1 --repo1-retention-full=2 --stanza=my_cluster
+2022-05-03 22:45:36.612 P00   INFO: expire command end: completed successfully (8ms)
+```
+
+The full backup was a success. That means it is working. Just need to setup cron jobs for it now. 
+
 
 
 
