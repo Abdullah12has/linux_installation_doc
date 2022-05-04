@@ -52,7 +52,7 @@ Creating a new postgres user admin for the database `sudo -u postgres createuser
 
 ## Install pgBackRest
 
-#### Before that need to understand types of backups: ####
+#### Types of backups: ####
 
 Definations:
 1. Full Backup: pgBackRest copies the entire contents of the database cluster to the backup. The first backup of the database cluster is always a Full Backup. pgBackRest is always able to restore a full backup directly. The full backup does not depend on any files outside of the full backup for consistency.
@@ -147,12 +147,7 @@ Now I have database named `projectData2`, table `students`.
 
 Now to configure the backup, I will set the following configurations in the `/etc/pgbackrest.conf` on the backup server. 
 
-```
-[my_cluster]
-pg1-host=posgresqserver
-pg1-host-user=postgres
-pg1-path=/var/lib/postgresql/12/main                                                                                                               
-
+```                                                                                                         
 [global]                                                                                                                                  
 process-max=2
 repo1-path=/var/lib/pgbackrest
@@ -161,6 +156,11 @@ repo1-retention-incr=30
 repo1-host-user=postgres
 start-fast=y
 
+[my_cluster]
+pg1-host=posgresqserver
+pg1-host-user=postgres
+pg1-path=/var/lib/postgresql/14/main    
+
 ```
 
 `repo1-retention-full=6`  means there will be 6 full backups retained. Each is after a month that means we can have full backups of 6 months back.
@@ -168,7 +168,7 @@ start-fast=y
 `repo1-retention-incr=30` means it will retain 30 incremental backups. Since there is one everyday, we will have of everyday until there is a new full backup. 
 
 
-I tried `sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info stanza-create` to create the first backup. This command should work on both the machines. But it failed.
+I tried `sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info stanza-create` to create the Stanza. This command should work on both the machines. But it failed.
 
 
 I had some things I was hoping that wouldn't cause a problem but my guess was that they're causing this error. 
@@ -242,6 +242,8 @@ network:
 Then `sudo netplan apply` to apply the changes.
 
 Now the ip addresses won't change and cause problems.
+* This might cause problems if the machines connect to other wifi routers whose gateway has a different address, but regardless they will always communicate with each other so this configuration works.
+
 
 
 After configuring all this I ran the following commands on the backup server:
@@ -344,8 +346,7 @@ The path where the backup repo is located is `/var/lib/pgbackrest` on the backup
 
 Just to double check the if pgbackrest is working:
 
- `pgbackrest check --stanza=my_cluster --log-level-console=info
-`
+ `pgbackrest check --stanza=my_cluster --log-level-console=info`
 
 returns:
 
@@ -373,13 +374,138 @@ To restore your DB from the backups, you need to stop the postgresql first by `s
 
 
 
+## Firewall ##
+
+### Database Server ###
+
+I configured the firewall so that no other request is accepted.
+
+```
+sudo su
+ufw default allow outgoing
+ufw default deny incoming
+ufw allow ssh
+ufw allow 5432/tcp # port 5432 is default for Postgresql
+ufw enable
+ufw status
+```
+`ufw status` is used to check if the firewall is enabled or not.
+
+Result:
+
+```
+Status: active
+
+To                         Action      From
+--                         ------      ----
+5432/tcp                   ALLOW       Anywhere                  
+22/tcp                     ALLOW       Anywhere                  
+5432/tcp (v6)              ALLOW       Anywhere (v6)             
+22/tcp (v6)                ALLOW       Anywhere (v6)             
+
+```
+So no one can access the server on other ports now.
+
+Next I tried the same on the backup server. I accidently added the port 5432 but we only have backup not the postgresql server so I deleted it using `ufw status numbered` to get the number and then `ufw delete 3` to delete the rule from the firewall.
+
+I reboot both machines to see if the firewall is working on reboot. I checked using sudo ufw status and the firewall is working perfectly. 
+
+Just to check if the firewall is not interfaring with the backup, I ran ` sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info check`
+then 
+ `sudo -u postgres pgbackrest --type=incr --stanza=my_cluster --log-level-console=info backup`
+
+Both executed perfectly. 
 
 
 
+Just realized that I had to do this as another user with minimun privileges. So Instead of doing all this for another user, I made another user called admin and gave it full privileges. Then I removed all the privileges from postgres exept read. 
+
+
+```  
+ALTER user admin WITH SUPERUSER;
+ALTER USER postgres set default_transaction_read_only = on;
+
+```
+
+This made the postgres user read only and it can carry out backups as I configured previously. 
+
+#### I know that was not the best practice but I had very less time left before deadline ####
+
+Then I also found that I only had to change the name of the user in the config file of the backup server, but I wasn't sure if that will be enough to change the main user making the backups from the server. 
+
+I accessed the db from external client and tried inserting and viewing data etc. Everythng is working on that end. But Postgres user will not be able to edit things. Which might not be the best decision to make while designing a system.
 
 
 
+*************
+If I had enough time. I would reset the db user postgres and then make a new one called backup using `sudo -u postgres createuser --interactive` name `backup` with no password and would be a superuser. 
+Then I would run `ALTER USER postgres set default_transaction_read_only = on;`
+That would only give it read access. Then I would edit the `/etc/pgbackrest.conf` 
+
+```
+
+[global]
+process-max=2
+repo1-path=/var/lib/pgbackrest
+repo1-retention-full=6
+repo1-retention-diff=30
+repo1-host-user=backup
+start-fast=y
+
+[my_cluster]
+pg1-host=posgresqserver
+pg1-host-user=postgres
+pg1-path=/var/lib/postgresql/14/main                                           >
 
 
+```
+This will enable the backup server to access db from the `backup` user.
 
 
+I was having problems settings the postgres user to be able to make changes. I found how to change it back. 
+```
+psql
+set default_transaction_read_only=off;
+```
+Result:
+```
+SET
+```
+
+I was so happy. I had 30 mins to implemend this. 
+
+Still gave the same error so I tried
+```
+ALTER USER postgres set default_transaction_read_only = off;
+```
+It worked this time.
+
+Then
+
+```
+sudo -u postgres createuser --interactive
+```
+name: backup
+superuser: yes
+
+
+```
+ALTER USER backup set default_transaction_read_only = on;
+```
+The user can only read now
+
+then `repo1-host-user=backup` set in `/etc/pgbackrest.conf` on the backup server.
+reboot both machines.
+
+
+I tried the backup check command:  ` sudo -u postgres pgbackrest --stanza=my_cluster --log-level-console=info check`
+
+Success
+
+Tried Backup: `sudo -u postgres pgbackrest --type=incr --stanza=my_cluster --log-level-console=info backup`
+
+completed successfully
+
+Everything on this project is working now. 
+
+User `backup` is being used for backups for the database.
